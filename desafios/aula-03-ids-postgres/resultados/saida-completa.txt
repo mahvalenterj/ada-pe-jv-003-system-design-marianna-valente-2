@@ -1,0 +1,141 @@
+Carregando 1000000 linhas em cada tabela, em lotes de 1000 ...
+Medindo o custo de só gerar os ids...
+--- Tempo de inserção e WAL gerado ---
+    segundos_liquidos = tempo total menos o custo de só gerar os ids (trabalho real de gravar e indexar)
+         tabela         | linhas  | segundos_total | segundos_gerando_id | segundos_liquidos | wal_gerado 
+------------------------+---------+----------------+---------------------+-------------------+------------
+ pedidos_seq            | 1000000 |           3.92 |                0.42 |              3.50 | 150 MB
+ pedidos_uuidv7         | 1000000 |          10.50 |                6.55 |              3.95 | 164 MB
+ pedidos_uuidv7_simples | 1000000 |           6.80 |                2.54 |              4.26 | 169 MB
+ pedidos_uuidv4         | 1000000 |           7.87 |                1.26 |              6.61 | 178 MB
+(4 rows)
+
+--- Tamanho e fragmentação do índice da chave primária ---
+         tabela         | tamanho_tabela | tamanho_indice | densidade_folhas_pct | fragmentacao_folhas_pct 
+------------------------+----------------+----------------+----------------------+-------------------------
+ pedidos_seq            | 57 MB          | 21 MB          |                90.06 |                       0
+ pedidos_uuidv4         | 65 MB          | 38 MB          |                 70.6 |                   49.78
+ pedidos_uuidv7         | 65 MB          | 30 MB          |                90.03 |                       0
+ pedidos_uuidv7_simples | 65 MB          | 39 MB          |                69.11 |                   30.43
+(4 rows)
+
+--- Correlação entre a ordem do id e a ordem física das linhas (1 = mesma ordem) ---
+         tabela         | correlacao 
+------------------------+------------
+ pedidos_seq            |      1.000
+ pedidos_uuidv4         |     -0.005
+ pedidos_uuidv7         |      1.000
+ pedidos_uuidv7_simples |      1.000
+(4 rows)
+
+=== A) Busca de um pedido pelo id (todas usam o índice) ===
+                                         QUERY PLAN                                         
+--------------------------------------------------------------------------------------------
+ Index Scan using pedidos_seq_pkey on pedidos_seq (actual time=0.021..0.022 rows=1 loops=1)
+   Index Cond: (id = '501'::bigint)
+   Buffers: shared read=4
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.073 ms
+ Execution Time: 0.031 ms
+(7 rows)
+
+                                            QUERY PLAN                                            
+--------------------------------------------------------------------------------------------------
+ Index Scan using pedidos_uuidv4_pkey on pedidos_uuidv4 (actual time=0.020..0.020 rows=1 loops=1)
+   Index Cond: (id = '7fb84b83-0c5a-4f39-b4de-2feb33a9e1cd'::uuid)
+   Buffers: shared read=4
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.039 ms
+ Execution Time: 0.025 ms
+(7 rows)
+
+                                            QUERY PLAN                                            
+--------------------------------------------------------------------------------------------------
+ Index Scan using pedidos_uuidv7_pkey on pedidos_uuidv7 (actual time=0.009..0.009 rows=1 loops=1)
+   Index Cond: (id = '01a18ee3-f1ec-7f91-9b0f-1dfd3a335da9'::uuid)
+   Buffers: shared hit=4
+ Planning:
+   Buffers: shared hit=6
+ Planning Time: 0.033 ms
+ Execution Time: 0.013 ms
+(7 rows)
+
+=== B) "Os 10.000 pedidos mais recentes" usando só a chave primária ===
+    Sequence e UUIDv7 leem páginas vizinhas; no UUIDv4 a ordem do id é aleatória:
+    além de ler páginas espalhadas pela tabela inteira, ele NÃO devolve os mais recentes.
+                                                  QUERY PLAN                                                   
+---------------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.012..1.600 rows=10000 loops=1)
+   Buffers: shared hit=122 read=11
+   ->  Index Scan Backward using pedidos_seq_pkey on pedidos_seq (actual time=0.011..1.074 rows=10000 loops=1)
+         Buffers: shared hit=122 read=11
+ Planning:
+   Buffers: shared hit=4
+ Planning Time: 0.035 ms
+ Execution Time: 1.924 ms
+(8 rows)
+
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.017..29.864 rows=10000 loops=1)
+   Buffers: shared hit=4237 read=5871 written=3144
+   ->  Index Scan Backward using pedidos_uuidv4_pkey on pedidos_uuidv4 (actual time=0.016..29.042 rows=10000 loops=1)
+         Buffers: shared hit=4237 read=5871 written=3144
+ Planning:
+   Buffers: shared hit=4 read=1
+ Planning Time: 0.041 ms
+ Execution Time: 30.280 ms
+(8 rows)
+
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Limit (actual time=0.009..2.853 rows=10000 loops=1)
+   Buffers: shared hit=163
+   ->  Index Scan Backward using pedidos_uuidv7_pkey on pedidos_uuidv7 (actual time=0.008..2.246 rows=10000 loops=1)
+         Buffers: shared hit=163
+ Planning Time: 0.052 ms
+ Execution Time: 3.325 ms
+(6 rows)
+
+=== C) Prova de que o UUIDv4 não tem ordem de tempo: data dos 5 "maiores" ids ===
+ estrategia |          mais_antigo          |         mais_recente          
+------------+-------------------------------+-------------------------------
+ uuidv4     | 2026-10-30 22:17:31.555729+00 | 2026-10-30 22:17:37.5549+00
+ uuidv7     | 2026-10-30 22:17:56.201917+00 | 2026-10-30 22:17:56.201948+00
+(2 rows)
+
+=== D) A consulta lenta do incidente: WHERE cliente_id = ? sem índice ===
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Gather (actual time=0.577..84.972 rows=16 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=8334
+   ->  Parallel Seq Scan on pedidos_uuidv7 (actual time=1.108..51.676 rows=5 loops=3)
+         Filter: (cliente_id = 41968)
+         Rows Removed by Filter: 333328
+         Buffers: shared hit=8334
+ Planning:
+   Buffers: shared hit=5
+ Planning Time: 0.031 ms
+ Execution Time: 84.987 ms
+(12 rows)
+
+    ... e depois de criar o índice em cliente_id:
+                                            QUERY PLAN                                            
+--------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on pedidos_uuidv7 (actual time=0.046..0.066 rows=16 loops=1)
+   Recheck Cond: (cliente_id = 41968)
+   Heap Blocks: exact=16
+   Buffers: shared hit=19 read=3
+   ->  Bitmap Index Scan on idx_pedidos_uuidv7_cliente (actual time=0.040..0.040 rows=16 loops=1)
+         Index Cond: (cliente_id = 41968)
+         Buffers: shared hit=3 read=3
+ Planning:
+   Buffers: shared hit=22 read=1
+ Planning Time: 0.149 ms
+ Execution Time: 0.083 ms
+(11 rows)
+
