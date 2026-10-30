@@ -1,0 +1,15 @@
+parceiro:
+  connect-timeout: 500ms
+  read-timeout: 1s
+
+contingencia:
+  capacidade: 2
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      parceiroPagamentos:
+        sliding-window-size: 4
+        minimum-number-of-calls: 4
+        wait-duration-in-open-state: 1s
+        permitted-number-of-calls-in-half-open-state: 2

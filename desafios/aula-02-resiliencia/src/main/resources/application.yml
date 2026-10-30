@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: aula-02-resiliencia
+  threads:
+    virtual:
+      enabled: true          # Virtual Threads: I/O bloqueante sem esgotar threads do SO
+  mvc:
+    problemdetails:
+      enabled: true          # erros do próprio Spring (validação, header ausente) também em RFC 7807
+
+server:
+  error:
+    include-stacktrace: never
+
+parceiro:
+  base-url: http://localhost:9090  # URL do parceiro (nos testes, o WireMock assume esse papel)
+  connect-timeout: 1s             # tempo para conseguir conectar (falhou aqui = nada foi cobrado)
+  read-timeout: 2s                # tempo máximo esperando a resposta (estourou aqui = cobrança incerta)
+
+contingencia:
+  capacidade: 1000                # tamanho máximo da fila de pagamentos pendentes de confirmação
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      parceiroPagamentos:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: false
+        record-exceptions:
+          - com.mahvalenterj.resiliencia.parceiro.ParceiroInacessivelException
+          - com.mahvalenterj.resiliencia.parceiro.ParceiroSemRespostaException
+          - com.mahvalenterj.resiliencia.parceiro.ParceiroErroException
+          - com.mahvalenterj.resiliencia.parceiro.ParceiroSobrecarregadoException
+        ignore-exceptions:
+          - com.mahvalenterj.resiliencia.parceiro.PagamentoRecusadoException
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,circuitbreakers,circuitbreakerevents
+  endpoint:
+    health:
+      show-details: always
+  health:
+    circuitbreakers:
+      enabled: true
